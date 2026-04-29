@@ -5,19 +5,19 @@
 <title>坦克大战</title>
 <style>
   body { margin:0; background:#000; display:flex; justify-content:center; align-items:center; min-height:100vh; }
-  canvas { border:2px solid #666; display:block; background:#333; }
+  canvas { border:2px solid #666; display:block; background:#333; cursor:default; }
 </style>
 </head>
 <body>
 <canvas id="c" width="780" height="780"></canvas>
 <script>
 // =========== 坦克大战 Battle City ===========
-const c = document.getElementById('c'), ctx = c.getContext('2d');
+var c = document.getElementById('c'), ctx = c.getContext('2d');
 
-const T = 26; // tile size
+const T = 26;
 const COLS = 30, ROWS = 30;
 
-// 地图 0=空 1=砖 2=钢 3=基地
+// 地图
 const MAP = [
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
   [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
@@ -56,10 +56,11 @@ const U=0,R=1,D=2,L=3;
 const dx=[0,1,0,-1], dy=[-1,0,1,0];
 
 // 音效
-let actx;
-function beep(f,dur,vol=0.08){
+var actx;
+function beep(f,dur,vol){
+  if(vol==null)vol=0.08;
   try{
-    if(!actx) actx=new AudioContext();
+    if(!actx)actx=new AudioContext();
     var o=actx.createOscillator(),g=actx.createGain();
     o.type='square'; o.frequency.value=f;
     g.gain.value=vol; g.gain.exponentialRampToValueAtTime(0.001,actx.currentTime+dur);
@@ -170,25 +171,27 @@ Tank.prototype={
       ctx.lineWidth=2; ctx.strokeRect(this.x-2,this.y-2,28,28);
     }
   },
-  aiTick(walls,tanks,b){
+  aiTick(walls,tanks,b,diff){
     this.aiTimer--;
     if(this.aiTimer<=0||Math.random()<0.02){
       this.aiTimer=40+Math.random()*80|0;
       this.dir=Math.random()<0.4?D:[U,R,D,L][Math.random()*4|0];
     }
     this.move(this.dir,walls,tanks);
-    if(Math.random()<0.03)this.fire(b);
+    // 射击频率受难度影响
+    var fireChance = diff=='easy' ? 0.015 : 0.03;
+    if(Math.random()<fireChance)this.fire(b);
   }
 };
 
 // ----- 游戏 ----
 var game={
   walls:[], enemies:[], bullets:[], exps:[], base:null, player:null,
-  score:0, lives:3, killed:0, total:20,
-  state:'play', spawnTimer:0, spawnQ:20,
+  score:0, lives:3, killed:0, total:20, difficulty:'normal',
+  state:'menu', spawnTimer:0, spawnQ:20,
+  menuSelect:-1, // -1=none, 0=easy, 1=hard
 
   init(){
-    this.build();
     this.loop();
   },
 
@@ -205,10 +208,16 @@ var game={
     this.player.shield=120;
   },
 
-  reset(){
-    this.score=0; this.lives=3; this.killed=0; this.state='play';
+  startGame(diff){
+    this.difficulty=diff;
+    this.score=0; this.lives=3; this.killed=0;
+    this.state='play';
     this.build();
-    this._ui();
+  },
+
+  reset(){
+    this.state='menu';
+    this.menuSelect=-1;
   },
 
   respawn(){
@@ -216,7 +225,6 @@ var game={
     this.lives--;
     this.player=new Tank(9*T+1,24*T+1,U,'player');
     this.player.shield=120;
-    this._ui();
   },
 
   spawnEnemy(){
@@ -242,13 +250,22 @@ var game={
 
   _hit(a,b){ return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y; },
 
-  _ui(){
-    // update header elements
-  },
-
   update(){
-    // spawn
-    if(this.spawnQ>0){ this.spawnTimer--; if(this.spawnTimer<=0){ this.spawnEnemy(); this.spawnTimer=100+Math.random()*80|0; }}
+    if(this.state!='play')return;
+
+    // 敌人刷新间隔受难度影响
+    if(this.spawnQ>0){
+      this.spawnTimer--;
+      if(this.spawnTimer<=0){
+        this.spawnEnemy();
+        // 简单模式: 刷新更慢 (180~260帧)  困难模式: 快 (100~180帧)
+        if(this.difficulty=='easy'){
+          this.spawnTimer=180+Math.random()*80|0;
+        } else {
+          this.spawnTimer=100+Math.random()*80|0;
+        }
+      }
+    }
 
     // player
     if(this.player&&this.player.alive){
@@ -265,7 +282,7 @@ var game={
       var e=this.enemies[i];
       if(!e.alive)continue;
       e.tick(this.walls,[this.player].concat(this.enemies),this.bullets);
-      e.aiTick(this.walls,[this.player].concat(this.enemies),this.bullets);
+      e.aiTick(this.walls,[this.player].concat(this.enemies),this.bullets,this.difficulty);
     }
 
     // bullets
@@ -275,7 +292,6 @@ var game={
       b.x+=dx[b.dir]*b.speed; b.y+=dy[b.dir]*b.speed;
       if(b.x<0||b.y<0||b.x>780||b.y>780){b.alive=false;continue;}
 
-      // vs walls
       for(var j=0;j<this.walls.length;j++){
         var w=this.walls[j]; if(!w.alive)continue;
         if(this._hit({x:b.x-3,y:b.y-3,w:6,h:6},w.box())){
@@ -286,7 +302,6 @@ var game={
       }
       if(!b.alive)continue;
 
-      // vs player
       if(b.owner!==this.player&&this.player&&this.player.alive){
         if(this._hit({x:b.x-3,y:b.y-3,w:6,h:6},this.player.box())){
           b.alive=false;
@@ -295,7 +310,6 @@ var game={
         }
       }
 
-      // vs enemies
       if(b.owner===this.player){
         for(var j=0;j<this.enemies.length;j++){
           var e=this.enemies[j]; if(!e.alive)continue;
@@ -309,7 +323,6 @@ var game={
       }
     }
 
-    // base
     if(this.base&&this.base.alive){
       for(var i=0;i<bl.length;i++){
         var b=bl[i]; if(!b.alive)continue;
@@ -321,7 +334,6 @@ var game={
       }
     }
 
-    // cleanup
     this.bullets=bl.filter(function(b){return b.alive});
     this.exps=this.exps.filter(function(e){return e.alive});
     for(var i=0;i<this.exps.length;i++){
@@ -331,30 +343,27 @@ var game={
 
   draw(){
     ctx.fillStyle='#333'; ctx.fillRect(0,0,780,780);
+
+    if(this.state=='menu'){ this._drawMenu(); return; }
+
     // grid
     ctx.strokeStyle='#444'; ctx.lineWidth=0.5;
     for(var i=0;i<=COLS;i++){ ctx.beginPath(); ctx.moveTo(i*T,0); ctx.lineTo(i*T,780); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i*T); ctx.lineTo(780,i*T); ctx.stroke(); }
 
-    // walls
     for(var i=0;i<this.walls.length;i++) this.walls[i].draw();
 
-    // base
     if(this.base)this.base.draw();
 
-    // player
     if(this.player&&this.player.alive&&this.state!='over'&&this.state!='win')this.player.draw();
 
-    // enemies
     for(var i=0;i<this.enemies.length;i++)if(this.enemies[i].alive)this.enemies[i].draw();
 
-    // bullets
     for(var i=0;i<this.bullets.length;i++){
       var b=this.bullets[i];
       ctx.fillStyle='#FFEB3B'; ctx.shadowColor='#FFEB3B'; ctx.shadowBlur=8;
       ctx.beginPath(); ctx.arc(b.x,b.y,3,0,7); ctx.fill(); ctx.shadowBlur=0;
     }
 
-    // explosions
     for(var i=0;i<this.exps.length;i++){
       var e=this.exps[i], a=e.t/(e.big?40:20);
       ctx.fillStyle='rgba(255,200,0,'+(1-a)*0.6+')';
@@ -365,25 +374,81 @@ var game={
       }
     }
 
-    // overlays
+    // HUD
+    ctx.fillStyle='#FFF'; ctx.font='14px monospace'; ctx.textAlign='left';
+    ctx.fillText('得分: '+this.score+'  生命: '+this.lives+'  剩余: '+(this.total-this.killed)+'  难度: '+(this.difficulty=='easy'?'简单':'困难'),10,16);
+
+    if(this.state=='pause'){
+      ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,780,780);
+      ctx.fillStyle='#FFF'; ctx.font='bold 48px monospace'; ctx.textAlign='center';
+      ctx.fillText('暂  停',390,350);
+      ctx.fillStyle='#AAA'; ctx.font='16px monospace';
+      ctx.fillText('按 P 继续',390,420);
+    }
+
     if(this.state=='over'){
       ctx.fillStyle='rgba(0,0,0,0.6)'; ctx.fillRect(0,0,780,780);
       ctx.fillStyle='#F44336'; ctx.font='bold 48px monospace'; ctx.textAlign='center';
       ctx.fillText('GAME OVER',390,350);
       ctx.fillStyle='#AAA'; ctx.font='16px monospace';
-      ctx.fillText('按 R 重新开始',390,420);
+      ctx.fillText('按 R 返回主菜单',390,420);
     }
     if(this.state=='win'){
       ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(0,0,780,780);
       ctx.fillStyle='#FFD700'; ctx.font='bold 48px monospace'; ctx.textAlign='center';
       ctx.fillText('胜 利 !',390,350);
       ctx.fillStyle='#FFF'; ctx.font='16px monospace';
-      ctx.fillText('得分: '+this.score+'  按 R 重新开始',390,420);
+      ctx.fillText('得分: '+this.score+'  按 R 返回主菜单',390,420);
     }
   },
 
+  _drawMenu(){
+    ctx.textAlign='center';
+
+    // 标题
+    ctx.fillStyle='#FFD700';
+    ctx.font='bold 56px monospace';
+    ctx.fillText('坦 克 大 战',390,180);
+
+    ctx.fillStyle='#AAA';
+    ctx.font='16px monospace';
+    ctx.fillText('BATTLE CITY',390,215);
+
+    // 装饰坦克
+    ctx.fillStyle='#FFD700'; ctx.font='48px monospace';
+    ctx.fillText('⬆',390,270);
+
+    // 难度选择
+    ctx.font='22px monospace';
+    ctx.fillStyle='#FFF';
+    ctx.fillText('选择难度',390,340);
+
+    // 简单按钮
+    var ey=380;
+    ctx.fillStyle=this.menuSelect==0?'#4CAF50':'#2E7D32';
+    ctx.fillRect(240,ey,300,50);
+    ctx.fillStyle='#FFF'; ctx.font='bold 24px monospace';
+    ctx.fillText('简 单',390,ey+34);
+
+    // 困难按钮
+    var ey2=450;
+    ctx.fillStyle=this.menuSelect==1?'#F44336':'#C62828';
+    ctx.fillRect(240,ey2,300,50);
+    ctx.fillStyle='#FFF'; ctx.font='bold 24px monospace';
+    ctx.fillText('困 难',390,ey2+34);
+
+    // 说明
+    ctx.fillStyle='#777'; ctx.font='14px monospace';
+    ctx.fillText('简单: 敌人刷新慢 · 攻击频率低',390,540);
+    ctx.fillText('困难: 敌人刷新快 · 攻击频率高',390,565);
+
+    ctx.fillStyle='#888'; ctx.font='14px monospace';
+    ctx.fillText('按 ↑↓ 选择  按 Enter 确认',390,610);
+    ctx.fillText('也可以直接用鼠标点击选择',390,635);
+  },
+
   loop(){
-    if(this.state=='play'||this.state=='over'||this.state=='win')this.update();
+    this.update();
     this.draw();
     requestAnimationFrame(function(){ game.loop(); });
   }
@@ -395,9 +460,37 @@ window.addEventListener('keydown',function(e){
   keys[e.key]=true;
   if(e.key=='r'||e.key=='R'){ game.reset(); }
   if(e.key=='p'||e.key=='P'){ if(game.state=='play')game.state='pause'; else if(game.state=='pause')game.state='play'; }
+
+  // 菜单操作
+  if(game.state=='menu'){
+    if(e.key=='ArrowDown'||e.key=='s'){ game.menuSelect=1; }
+    if(e.key=='ArrowUp'||e.key=='w'){ game.menuSelect=0; }
+    if(e.key=='Enter'||e.key==' '){
+      if(game.menuSelect==0)game.startGame('easy');
+      else if(game.menuSelect==1)game.startGame('hard');
+    }
+  }
+
   if(e.key==' ')e.preventDefault();
 });
 window.addEventListener('keyup',function(e){ keys[e.key]=false; });
+
+// 鼠标操作菜单
+c.addEventListener('mousemove',function(e){
+  if(game.state!='menu')return;
+  var rect=c.getBoundingClientRect();
+  var ex=e.clientX-rect.left, ey=e.clientY-rect.top;
+  game.menuSelect=-1;
+  if(ex>=240&&ex<=540&&ey>=380&&ey<=430)game.menuSelect=0;
+  if(ex>=240&&ex<=540&&ey>=450&&ey<=500)game.menuSelect=1;
+});
+c.addEventListener('click',function(e){
+  if(game.state!='menu')return;
+  var rect=c.getBoundingClientRect();
+  var ex=e.clientX-rect.left, ey=e.clientY-rect.top;
+  if(ex>=240&&ex<=540&&ey>=380&&ey<=430)game.startGame('easy');
+  if(ex>=240&&ex<=540&&ey>=450&&ey<=500)game.startGame('hard');
+});
 
 game.init();
 </script>
